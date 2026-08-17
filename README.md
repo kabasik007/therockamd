@@ -1,110 +1,159 @@
 # TheRock AMD Bootstrap
 
-Canonical, test-driven bootstrap for local AI workloads on AMD GPUs.
+Canonical, test-driven bootstrap and knowledge base for local AI workloads on AMD GPUs.
 
-This repository exists so we do **not** rediscover the same AMD / ROCm / PyTorch problems in every new project or every new AI chat.
+The point of this repository is simple: **do not rediscover the same AMD / ROCm / PyTorch problems in every project or every new AI chat.** Read the local PASS/FAIL history first, preserve the known-good runtime, then test one layer at a time.
 
-Current primary test machine:
+## Primary verified machine
 
 - GPU: **AMD Radeon RX 6900 XT 16 GB**
-- Architecture: **RDNA2**
-- LLVM/GFX target: **gfx1030**
-- OS: **Windows 11**
-- Python baseline: **3.12 x64**
-- Working PyTorch path: **AMD TheRock multi-arch ROCm nightlies**
+- Architecture: **RDNA2 / gfx1030**
+- OS: **Windows 11 x64**
+- Python: **3.12.8 x64**
+- GPU runtime: **AMD TheRock multi-arch PyTorch / ROCm packages**
+- UI: **ComfyUI**
+
+## Current verified status
+
+The following has been proven on the real machine:
+
+- TheRock `device-gfx1030` PyTorch recognizes RX 6900 XT.
+- GPU matmul: **PASS**.
+- FP16 matmul: **PASS**.
+- Conv2d / MIOpen path: **PASS**.
+- ComfyUI starts on native AMD/HIP.
+- DynamicVRAM is enabled.
+- ComfyUI-Manager imports.
+- ComfyUI_IPAdapter_plus imports.
+- comfyui_controlnet_aux imports.
+- **Z-Image Turbo text-to-image: VERIFIED PASS at 1024x1024 / 8 steps.**
+
+Exact observed versions and settings are in [`docs/KNOWN_GOOD_RX6900XT.md`](docs/KNOWN_GOOD_RX6900XT.md).
 
 ## Read this first
 
-AI agents and humans should read [`AGENTS.md`](AGENTS.md) before proposing an AMD setup.
+AI agents and humans should read [`AGENTS.md`](AGENTS.md) before changing packages or recommending a new AMD setup.
 
-The most important rule:
+Critical distinction:
 
-> Do not confuse AMD's official production PyTorch support matrix with the wider set of GPUs supported by TheRock multi-arch packages.
+> AMD's official production PyTorch support matrix and TheRock multi-arch device coverage are not the same thing.
 
-As of 2026-08-17, AMD's Windows PyTorch ROCm 7.2.1 production matrix does **not** list RX 6900 XT / gfx1030. However, AMD TheRock multi-arch releases explicitly provide `device-gfx1030`, including Windows PyTorch packages.
+For this machine, the practical known-good route is TheRock `device-gfx1030`. Changing that base without first reading the test ledger is a regression risk.
 
-## Known-good RX 6900 XT install path
+## Quick start — ComfyUI
 
-Create a clean Python 3.12 environment and install PyTorch from TheRock:
+Base setup:
+
+```bat
+scripts\10_SETUP_COMFYUI_RX6900XT.bat
+```
+
+Optional manager and basic pose/reference nodes:
+
+```bat
+scripts\12_INSTALL_COMFYUI_MANAGER.bat
+scripts\13_INSTALL_BASIC_CUSTOM_NODES.bat
+```
+
+Install the verified Z-Image Turbo model set:
+
+```bat
+scripts\14_INSTALL_Z_IMAGE_TURBO_MODELS.bat
+```
+
+Start:
+
+```bat
+scripts\11_LAUNCH_COMFYUI_RX6900XT.bat
+```
+
+Stop reliably:
+
+```bat
+STOP_COMFYUI.bat
+```
+
+Verified workflow:
+
+```text
+workflows\Z_IMAGE_TURBO_RX6900XT_VERIFIED.json
+```
+
+## Known-good TheRock package route
+
+The tested stack uses the TheRock multi-arch index and protects the torch family as one unit:
 
 ```bat
 py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m pip install --upgrade pip
-.venv\Scripts\python.exe -m pip install --upgrade --index-url https://rocm.nightlies.amd.com/whl-multi-arch/ "torch[device-gfx1030]" "torchvision[device-gfx1030]"
+.venv\Scripts\python.exe -m pip install --upgrade --index-url https://rocm.nightlies.amd.com/whl-multi-arch/ "torch[device-gfx1030]" "torchvision[device-gfx1030]" torchaudio
 ```
 
-Then run:
+`torch.cuda` / `cuda:0` are historical PyTorch API names and can refer to the AMD ROCm/HIP backend. They do **not** prove NVIDIA CUDA is in use.
 
-```bat
-.venv\Scripts\python.exe scripts\doctor.py
-```
+## Z-Image Turbo golden rule
 
-Expected core result:
+Required model files:
 
 ```text
-torch.cuda.is_available() = True
-GPU = AMD Radeon RX 6900 XT
+models\text_encoders\qwen_3_4b.safetensors
+models\diffusion_models\z_image_turbo_bf16.safetensors
+models\vae\ae.safetensors
 ```
 
-`torch.cuda` is the compatibility namespace used by PyTorch. Seeing `torch.cuda` does **not** mean the workload is using NVIDIA CUDA.
-
-## Proven workload
-
-The same TheRock `gfx1030` route is used by the tested NuovaRicambi Image Cleaner stack:
+The VAE selector must be:
 
 ```text
-RX 6900 XT
-  -> TheRock ROCm PyTorch
-  -> MIOpen / HIPRTC
-  -> DENet watermark-mask detection
-  -> BiRefNet foreground segmentation
-  -> GPU batch processing
+ae.safetensors
 ```
 
-A 20-image test batch and MIOpen BatchNorm smoke test were successfully used as validation gates before full processing.
+Do **not** use `pixel_space` for this workflow. That exact mistake completed 8/8 sampling but then sent a 16-channel tensor into `SaveImage`, causing Pillow to fail. The corrected workflow generated a real 1024x1024 image.
+
+## Obstacles already solved
+
+The repository records the failures we hit so they are not repeated:
+
+- logger wrapper `WorkerArgument` mismatch;
+- internal `worker` token leaking into `main.py`;
+- Windows BAT `shift` changing `%0` and blanking `%~f0`;
+- missing `torchaudio` after protecting the TheRock torch stack;
+- stale ComfyUI process causing port `8188` conflict and `comfyui.db` lock;
+- missing Z-Image model payloads;
+- wrong Z-Image VAE (`pixel_space`) causing `(1, 1, 16)` SaveImage failure.
+
+See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) and [`docs/TEST_LEDGER.md`](docs/TEST_LEDGER.md).
 
 ## Repository map
 
 - [`AGENTS.md`](AGENTS.md) — operating contract for AI agents.
-- [`docs/KNOWN_GOOD_RX6900XT.md`](docs/KNOWN_GOOD_RX6900XT.md) — known-good machine and install facts.
-- [`docs/TEST_LEDGER.md`](docs/TEST_LEDGER.md) — PASS / FAIL / BLOCKED history. Add new experiments here.
-- [`docs/STACK_MATRIX.md`](docs/STACK_MATRIX.md) — which backend to prefer for ComfyUI, diffusion, LLMs, RVC and other workloads.
-- [`docs/COMFYUI_PLAN.md`](docs/COMFYUI_PLAN.md) — current image-generation experiment plan.
-- [`scripts/doctor.py`](scripts/doctor.py) — minimal AMD PyTorch / MIOpen smoke test.
+- [`docs/KNOWN_GOOD_RX6900XT.md`](docs/KNOWN_GOOD_RX6900XT.md) — exact proven machine/runtime state.
+- [`docs/TEST_LEDGER.md`](docs/TEST_LEDGER.md) — empirical PASS / FAIL / FIXED history.
+- [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — symptom → cause → fix.
+- [`docs/SESSION_2026-08-17_18.md`](docs/SESSION_2026-08-17_18.md) — full successful ComfyUI/Z-Image session record.
+- [`docs/Z_IMAGE_TURBO_RX6900XT.md`](docs/Z_IMAGE_TURBO_RX6900XT.md) — verified Z-Image recipe.
+- [`docs/COMFYUI_SETUP.md`](docs/COMFYUI_SETUP.md) — current practical installer guide.
+- [`docs/STACK_MATRIX.md`](docs/STACK_MATRIX.md) — workload/backend planning.
+- [`docs/COMFYUI_PLAN.md`](docs/COMFYUI_PLAN.md) — broader image-generation plan.
+- [`docs/UPSTREAM_SOURCES.md`](docs/UPSTREAM_SOURCES.md) — upstream facts that must be re-checked as they change.
+- [`scripts/doctor.py`](scripts/doctor.py) — AMD PyTorch / MIOpen smoke test.
+- [`workflows/Z_IMAGE_TURBO_RX6900XT_VERIFIED.json`](workflows/Z_IMAGE_TURBO_RX6900XT_VERIFIED.json) — real verified workflow.
 
 ## Golden rules
 
 1. **Never install ordinary PyPI `torch` over a known-good TheRock environment.**
-2. Keep `torch`, `torchvision`, and ROCm device packages under explicit control.
-3. New applications get a new venv. Do not destroy a working one to test another app.
-4. Run the doctor before blaming ComfyUI, Diffusers, Transformers, RVC, a model, or a custom node.
+2. Treat `torch`, `torchvision`, and `torchaudio` as a protected matched stack.
+3. New applications get their own venv.
+4. Run the doctor before blaming ComfyUI, a model, a custom node, or AMD.
 5. Treat CUDA-only extensions as compatibility blockers until a HIP/ROCm path is verified.
 6. Snapshot exact package versions when a stack works.
 7. Record failed routes so a future AI does not recommend them again.
-
-## Source of truth vs current experiments
-
-This repository separates three states:
-
-- **KNOWN GOOD** — personally tested on the target machine.
-- **SUPPORTED UPSTREAM** — documented by AMD / TheRock / the upstream project but not necessarily tested locally.
-- **EXPERIMENTAL** — worth trying, but not yet accepted as a local baseline.
-
-Never silently promote an experimental path to known-good.
-
-## Primary upstream references
-
-- AMD TheRock releases: https://github.com/ROCm/TheRock/blob/main/RELEASES.md
-- AMD TheRock project: https://github.com/ROCm/TheRock
-- AMD Windows Radeon compatibility: https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/compatibility/compatibilityrad/windows/windows_compatibility.html
-- AMD Windows HIP SDK system requirements: https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/shared/hipsdk/reference/system-requirements.html
-- ComfyUI: https://github.com/Comfy-Org/ComfyUI
+8. Never promote an experiment to KNOWN GOOD without a real local PASS.
 
 ## Scope
 
-The repo is not limited to image generation. It is intended to become the reusable AMD bootstrap for:
+This repository is intended to become the reusable AMD bootstrap for:
 
-- ComfyUI / Stable Diffusion / SDXL / FLUX-class image models
+- ComfyUI / diffusion image models
 - LoRA inference and training
 - ControlNet / OpenPose / IP-Adapter
 - Diffusers / Transformers
@@ -115,4 +164,4 @@ The repo is not limited to image generation. It is intended to become the reusab
 - model fine-tuning
 - custom HIP-compatible ML workloads
 
-The rule is simple: **test, measure, record, reuse**.
+The rule is: **test, measure, record, reuse**.
