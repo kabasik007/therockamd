@@ -1,22 +1,64 @@
-# AMD Test Ledger
+# AMD Test Ledger — RX 6900 XT / TheRock / ComfyUI
 
-This is the canonical history of what was actually tried.
+This is the canonical empirical history. Future agents should read it before trying a new installation path.
 
-Use one of these statuses:
+## Status meanings
 
-- `PASS` — locally confirmed working.
-- `FAIL` — locally confirmed not working.
-- `BLOCKED` — could not complete because of another dependency/problem.
-- `UPSTREAM` — documented upstream but not yet locally tested.
-- `UNKNOWN` — evidence incomplete.
+- **PASS** — actually worked on the target machine.
+- **FAIL** — actually failed; root cause identified or still under investigation.
+- **FIXED** — failed first, then a concrete Bootstrap change solved it.
+- **BLOCKED** — could not be tested because of an external dependency.
+- **UPSTREAM** — documented upstream but not yet locally tested.
+- **UNKNOWN** — evidence incomplete.
 
 Do not erase failures. They are useful bootstrap knowledge.
 
-## 2026-08-17 — RX 6900 XT / TheRock PyTorch gfx1030
+## 2026-08-17 / 2026-08-18 — ComfyUI / Z-Image session ledger
+
+| Seq | Area | Result | Observation / root cause | Resolution |
+|---:|---|---|---|---|
+| 1 | Python | PASS | Python 3.12.8 x64 available | Keep 3.12 baseline |
+| 2 | TheRock torch gfx1030 | PASS | RX 6900 XT detected; GPU kernels execute | Preserve TheRock multi-arch stack |
+| 3 | GPU matmul | PASS | GPU matmul succeeds | doctor gate |
+| 4 | FP16 matmul | PASS | FP16 workload succeeds | doctor gate |
+| 5 | Conv2d / MIOpen | PASS | Conv2d works despite CK grouped-conv warning | warning classified non-blocking |
+| 6 | BAT logger v0.1.1 | FAIL/FIXED | PowerShell `WorkerArgument` required but launch supplied no usable value | removed brittle parameter design |
+| 7 | BAT worker token | FAIL/FIXED | internal `worker` reached `main.py`; ComfyUI rejected `unrecognized arguments: worker` | consume worker internally / never forward it to app args |
+| 8 | BAT `shift` | FAIL/FIXED | `shift` also shifted `%0`; `%~f0` became empty; logger got empty `BatPath` | never use `shift` before reading `%~f0` in this wrapper |
+| 9 | ComfyUI dependency | FAIL/FIXED | `ModuleNotFoundError: torchaudio` because protected requirements filter skipped it | install/repair torchaudio from same TheRock multi-arch index |
+| 10 | ComfyUI launch | PASS | server reached `http://127.0.0.1:8188` on native AMD/HIP | baseline accepted |
+| 11 | Custom nodes | PASS | Manager, IPAdapter Plus, controlnet_aux import | baseline accepted |
+| 12 | Duplicate ComfyUI instance | FAIL/FIXED | port 8188 already in use + SQLite `comfyui.db` lock | add reliable STOP switch; add launch port preflight |
+| 13 | ComfyUI-Manager network | DEGRADED/PASS | registry fetch sometimes failed and fell back to local/raw GitHub list | not a GPU blocker |
+| 14 | Z-Image template models | FAIL/FIXED | qwen + diffusion model missing; VAE also required | add script 14 official model installer |
+| 15 | Z-Image sampling | PASS | Lumina2/Z-Image completed all 8 sampling steps at 1024x1024 | GPU/model path validated |
+| 16 | Z-Image SaveImage | FAIL/FIXED | `Load VAE = pixel_space` returned 16-channel data; Pillow error `(1,1,16), |u1` | set `Load VAE = ae.safetensors` |
+| 17 | Z-Image full generation | PASS | 1024x1024 image successfully decoded and displayed/saved | Z-Image Turbo promoted to VERIFIED |
+
+## Important evidence from the successful path
+
+The successful path is not merely “ComfyUI opened”. It passed these increasingly strong gates:
+
+```text
+TheRock import
+  -> GPU detected
+  -> matmul PASS
+  -> FP16 PASS
+  -> Conv2d/MIOpen PASS
+  -> ComfyUI native HIP startup PASS
+  -> custom nodes import PASS
+  -> Z-Image text encoder load PASS
+  -> Z-Image diffusion model load PASS
+  -> 8/8 sampling PASS
+  -> real VAE decode with ae.safetensors PASS
+  -> Save Image PASS
+```
+
+## Earlier 2026-08-17 — NuovaRicambi Image Cleaner
+
+### RX 6900 XT / TheRock PyTorch gfx1030
 
 **Status:** PASS
-
-**Target:** Windows / AMD Radeon RX 6900 XT 16 GB / RDNA2 / gfx1030.
 
 **Install route:**
 
@@ -24,17 +66,11 @@ Do not erase failures. They are useful bootstrap knowledge.
 pip install --upgrade --index-url https://rocm.nightlies.amd.com/whl-multi-arch/ "torch[device-gfx1030]" "torchvision[device-gfx1030]"
 ```
 
-**Evidence:** The supplied `NuovaRicambi_ImageCleaner_RX6900XT_v0.3.0` package uses this as its AMD setup path.
-
 **Reuse:** YES. This is the default Windows PyTorch route for this machine until a newer path is locally proven better.
 
----
-
-## 2026-08-17 — MIOpen BatchNorm smoke test
+### MIOpen BatchNorm smoke test
 
 **Status:** PASS
-
-**Test pattern:**
 
 ```python
 import torch
@@ -45,17 +81,11 @@ torch.cuda.synchronize()
 print(y.shape, float(y.mean()))
 ```
 
-**Purpose:** Verify that a real GPU neural-network primitive works, not just `import torch`.
+Purpose: verify a real GPU neural-network primitive, not just `import torch`.
 
-**Reuse:** YES. Keep this in every doctor script.
-
----
-
-## 2026-08-17 — NuovaRicambi Image Cleaner GPU architecture
+### NuovaRicambi Image Cleaner GPU architecture
 
 **Status:** PASS
-
-**Stack:**
 
 ```text
 TheRock ROCm PyTorch / gfx1030
@@ -64,48 +94,30 @@ TheRock ROCm PyTorch / gfx1030
 -> GPU batch pipeline
 ```
 
-**Notes:** The application explicitly raises an error when `torch.cuda.is_available()` is false. It is therefore designed to fail fast rather than silently process on CPU.
-
-**Reuse:** YES. Useful reference implementation for other vision workloads.
-
----
-
-## 2026-08-17 — DENet historical torch pins
+### DENet historical torch pins
 
 **Status:** FAIL / DO NOT USE
-
-Historical dependency pins:
 
 ```text
 torch==1.8.1
 torchvision==0.9.1
 ```
 
-**Reason:** They are legacy dependencies and would destroy the current AMD/TheRock runtime if installed blindly.
+Reason: legacy dependencies would destroy the current AMD/TheRock runtime if installed blindly. Preserve modern TheRock PyTorch and adapt the old dependency set around it.
 
-**Action:** Preserve modern TheRock PyTorch; adapt DENet dependencies around it.
+## Support-matrix facts recorded during the session
 
-**Reuse:** NO.
-
----
-
-## 2026-08-17 — AMD official Windows ROCm 7.2.1 production PyTorch route for RX 6900 XT
+### AMD official Windows ROCm 7.2.1 production PyTorch route for RX 6900 XT
 
 **Status:** NOT LISTED IN PRODUCTION PYTORCH MATRIX
 
-AMD's current Windows ROCm 7.2.1 Radeon PyTorch matrix lists newer gfx11/gfx12 products and does not list RX 6900 XT/gfx1030.
+This is a support-matrix fact, not a local runtime failure. The practical local route is TheRock `device-gfx1030` plus empirical validation.
 
-This is not recorded as a local runtime failure. It is a support-matrix fact.
-
-**Action:** Use TheRock `device-gfx1030` and validate locally.
-
----
-
-## 2026-08-17 — RX 6900 XT in Windows HIP SDK matrix
+### RX 6900 XT in Windows HIP SDK matrix
 
 **Status:** UPSTREAM SUPPORTED
 
-AMD lists RX 6900 XT as:
+Recorded as:
 
 ```text
 RDNA2 / gfx1030
@@ -113,9 +125,30 @@ Runtime: supported
 HIP SDK: supported
 ```
 
-This explains why `gfx1030` remains a legitimate Windows HIP target even though the production Windows PyTorch matrix is narrower.
+## Known non-blocking messages seen during successful operation
 
----
+- MIOpen `CK grouped conv library not found for device gfx1030` while Conv2d passes.
+- `No OpenGL_accelerate module loaded`.
+- Triton backend unavailable.
+- ComfyUI-Manager registry/API fetch error with fallback.
+- Legacy frontend API deprecation warnings from custom nodes.
+
+Do not reinstall the AMD runtime solely because one of these messages appears.
+
+## Next experiments to record
+
+- LoRA inference
+- ControlNet Canny
+- ControlNet Depth
+- OpenPose / DWPose generation
+- IP-Adapter reference-image guidance
+- inpainting
+- upscaling
+- SDXL
+- additional diffusion architectures
+- model training / fine-tuning
+- RVC / audio workloads
+- LLM workloads
 
 # Template for new experiments
 
@@ -131,7 +164,7 @@ This explains why `gfx1030` remains a legitimate Windows HIP target even though 
 
 **torch / torchvision / ROCm package versions:**
 
-**Command:**
+**Command / workflow settings:**
 
 ```text
 ...
