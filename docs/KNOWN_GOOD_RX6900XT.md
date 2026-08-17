@@ -1,105 +1,144 @@
-# Known-good baseline — RX 6900 XT / Windows
+# Known-good RX 6900 XT state
 
-Status date: 2026-08-17
+Status: **VERIFIED LOCALLY**
 
-## Hardware
+Last verified during the 2026-08-17 / 2026-08-18 Windows test session.
 
-| Item | Value |
+## Hardware / OS
+
+| Item | Observed value |
 |---|---|
 | GPU | AMD Radeon RX 6900 XT |
-| VRAM | 16 GB |
-| Architecture | RDNA2 |
-| LLVM/GFX target | gfx1030 |
-| OS | Windows 11 |
+| Architecture | gfx1030 / RDNA2 |
+| VRAM | 15.98 GiB reported by doctor; ComfyUI reports 16368 MB |
+| OS | Windows 11, build family 10.0.26100 |
+| Python | 3.12.8 x64 |
 
-## Support reality
+## PyTorch / TheRock
 
-### AMD Windows HIP SDK
-
-RX 6900 XT is listed by AMD as:
+Observed working environment:
 
 ```text
-RDNA2
-LLVM target: gfx1030
-Runtime: supported
-HIP SDK: supported
+torch                  2.13.0+rocm10.1.0a20260817
+torchvision            0.28.0+rocm10.1.0a20260817
+amd-torch-device-gfx1030       2.13.0+rocm10.1.0a20260817
+amd-torchvision-device-gfx1030 0.28.0+rocm10.1.0a20260817
+rocm package           10.1.0a20260817
+rocm-sdk-device-gfx1030 10.1.0a20260817
+torch.version.hip      7.16.26323
+torch.version.cuda     None
 ```
 
-### AMD production PyTorch matrix
-
-The ROCm 7.2.1 Windows PyTorch production matrix currently lists gfx1201/gfx1200/gfx1100/gfx1101 Radeon products, not RX 6900 XT / gfx1030.
-
-This does not invalidate TheRock.
-
-### AMD TheRock
-
-TheRock multi-arch packages separate GPU-specific device kernels from common host packages. The supported device extras include the gfx target selected during installation.
-
-For this machine the working route is:
-
-```bat
-pip install --upgrade --index-url https://rocm.nightlies.amd.com/whl-multi-arch/ "torch[device-gfx1030]" "torchvision[device-gfx1030]"
-```
-
-Nightlies are not equivalent to AMD's production support guarantee. They must be validated locally.
-
-## Local proven stack
-
-The NuovaRicambi Image Cleaner v0.3.0 archive supplied on 2026-08-17 contains an AMD setup script that installs exactly:
-
-```bat
-"torch[device-gfx1030]"
-"torchvision[device-gfx1030]"
-```
-
-from:
+ComfyUI reported:
 
 ```text
-https://rocm.nightlies.amd.com/whl-multi-arch/
+AMD arch: gfx1030
+ROCm version: (7, 16)
+Device: cuda:0 AMD Radeon RX 6900 XT : native
 ```
 
-The same package contains a MIOpen BatchNorm smoke test and application safeguards against legacy DENet torch pins.
+The `cuda:0` label is the historical PyTorch device API namespace. This is still the AMD ROCm/HIP backend.
 
-This path has therefore moved from theory to **local known-good architecture**.
+## Smoke tests
 
-## Python
+`scripts\doctor.py` has passed on the real machine:
 
-Use Python 3.12 x64 as the conservative default for current Windows ROCm work.
-
-Do not upgrade an established working environment to another Python minor version just because the new application itself supports it.
-
-## Minimum acceptance test
-
-A Python environment is not accepted as known-good until all of these pass:
-
-```python
-import torch
-assert torch.cuda.is_available()
-print(torch.__version__)
-print(torch.cuda.get_device_name(0))
-
-x = torch.randn(1024, 1024, device="cuda")
-y = x @ x
-assert y.is_cuda
-
-torch.cuda.synchronize()
-
-m = torch.nn.BatchNorm2d(8).cuda().eval()
-z = torch.randn(1, 8, 64, 64, device="cuda")
-out = m(z)
-torch.cuda.synchronize()
-print(out.shape)
+```text
+GPU count: 1
+GPU 0: AMD Radeon RX 6900 XT
+Matmul: PASS
+Conv2d/MIOpen path: PASS
+FP16 matmul: PASS
+[PASS] AMD PyTorch GPU backend is working.
 ```
 
-Expected GPU identity must resolve to RX 6900 XT or the actual AMD adapter, not CPU emulation.
+A MIOpen warning about the CK grouped convolution runtime library was observed, but the actual Conv2d/MIOpen smoke test passed. Therefore the warning alone is not a failure condition for this stack.
 
-## Preservation rule
+## ComfyUI
 
-Once an environment passes:
+Observed working values during successful launch:
 
-```bat
-python -m pip freeze > requirements-known-good.txt
-python scripts\doctor.py > doctor-known-good.txt
+```text
+ComfyUI version: 0.33.0
+Git description observed: v0.33.0-19-gc1739380
+comfyui-frontend-package: 1.49.6
+comfyui-workflow-templates: 0.11.43
+comfyui-embedded-docs: 0.5.10
+comfy-kitchen: 0.2.31
+comfy-aimdo: 0.4.13
 ```
 
-Then clone or create a new venv for experiments. Never use a passing environment as a scratchpad.
+Observed runtime behavior:
+
+- HIP backend available and enabled.
+- eager backend available and enabled.
+- Triton backend unavailable / disabled.
+- DynamicVRAM detected and enabled.
+- `NORMAL_VRAM` selected.
+- async weight offloading enabled with 2 streams.
+- pinned memory enabled.
+- server starts at `http://127.0.0.1:8188`.
+
+## Custom nodes verified to import
+
+- `ComfyUI-Manager`
+- `ComfyUI_IPAdapter_plus`
+- `comfyui_controlnet_aux`
+- `websocket_image_save.py`
+
+DWPose reported ONNX Runtime acceleration providers available during import.
+
+## Z-Image Turbo — VERIFIED PASS
+
+The following exact class of workflow generated a real 1024x1024 image on RX 6900 XT:
+
+```text
+Text encoder : qwen_3_4b.safetensors
+CLIP type    : lumina2
+Diffusion    : z_image_turbo_bf16.safetensors
+VAE          : ae.safetensors
+Resolution   : 1024 x 1024
+Batch        : 1
+Steps        : 8
+CFG          : 1.0
+Sampler      : res_multistep
+Scheduler    : simple
+Denoise      : 1.0
+Seed tested  : 42
+Sampling     : completed 8/8
+```
+
+A previous run completed sampling but failed at `SaveImage` because the VAE selector was accidentally set to `pixel_space`. Changing it to `ae.safetensors` produced the successful image.
+
+Verified workflow:
+
+`workflows\Z_IMAGE_TURBO_RX6900XT_VERIFIED.json`
+
+## Earlier verified vision workload
+
+The NuovaRicambi Image Cleaner architecture was also proven on this machine using the same TheRock `gfx1030` route:
+
+```text
+TheRock ROCm PyTorch / gfx1030
+-> DENet watermark/logo mask detection
+-> BiRefNet segmentation
+-> GPU batch pipeline
+```
+
+The key preservation rule from that project still applies: do not install historical model pins such as `torch==1.8.1` / `torchvision==0.9.1` over the working modern runtime.
+
+## What is NOT yet verified
+
+Do not infer success for these just because ComfyUI starts:
+
+- LoRA inference on this exact stack
+- LoRA training
+- ControlNet generation on this exact stack
+- OpenPose-driven generation
+- IP-Adapter generation
+- FLUX-class workflows
+- SDXL on this exact Bootstrap
+- RVC/audio workloads
+- LLM inference/training
+
+They remain future test items until recorded in `TEST_LEDGER.md`.
