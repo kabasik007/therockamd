@@ -1,115 +1,83 @@
-# AGENTS.md — AMD / ROCm Operating Contract
+# TheRock AMD Bootstrap — AI Agent Contract
 
-This file is the first thing an AI agent should read before changing, installing, debugging, or recommending anything related to AMD GPU compute on this machine.
+Read this file before changing the AMD AI stack.
 
-## Primary target
+## Target machine
 
+- OS: Windows 11 x64
 - GPU: AMD Radeon RX 6900 XT 16 GB
-- Architecture: RDNA2
-- GFX target: gfx1030
-- OS: Windows 11
-- Current preferred Python baseline: 3.12 x64
-- Preferred PyTorch route: AMD TheRock multi-arch packages
+- GPU architecture: RDNA2 / gfx1030
+- Python baseline: 3.12 x64
+- Primary GPU runtime: AMD TheRock multi-arch PyTorch / ROCm packages
+- Primary UI: ComfyUI
 
-## Critical distinction
+## Non-negotiable rules
 
-There are two different questions:
+1. Do **not** assume the official AMD production PyTorch support matrix is the same thing as TheRock multi-arch support.
+2. For this RX 6900 XT machine, preserve the proven TheRock `gfx1030` stack.
+3. Never replace the working torch stack with generic PyPI CUDA/NVIDIA wheels.
+4. Treat `torch`, `torchvision`, and `torchaudio` as one protected stack and install them from the same TheRock multi-arch index.
+5. `torch.cuda` and `cuda:0` are historical PyTorch compatibility names on ROCm. They do not imply an NVIDIA GPU.
+6. Before blaming ComfyUI, a model, or a custom node, run `scripts\doctor.py`.
+7. Do not run a second ComfyUI instance on port 8188. Use `STOP_COMFYUI.bat` to terminate the instance belonging to this Bootstrap.
+8. Keep separate venvs for unrelated AI applications. Do not destroy a known-good environment to test another project.
+9. Record PASS / FAIL / BLOCKED experiments in `docs/TEST_LEDGER.md`.
+10. Never promote a path to KNOWN GOOD without an actual local successful workload.
 
-1. Is RX 6900 XT listed in AMD's official production PyTorch support matrix for a given ROCm release?
-2. Is gfx1030 supported by a usable TheRock multi-arch package?
+## Current proven stack
 
-These are **not the same thing**.
+The following has been proven locally:
 
-As of 2026-08-17:
+- TheRock PyTorch recognizes RX 6900 XT / gfx1030.
+- GPU matmul: PASS.
+- FP16 matmul: PASS.
+- Conv2d / MIOpen path: PASS.
+- ComfyUI starts on native AMD/HIP.
+- DynamicVRAM is enabled.
+- ComfyUI-Manager imports.
+- ComfyUI_IPAdapter_plus imports.
+- comfyui_controlnet_aux imports.
+- Z-Image Turbo text-to-image: PASS at 1024x1024, 8 sampling steps.
 
-- AMD's Windows ROCm 7.2.1 production PyTorch matrix does not list RX 6900 XT / gfx1030.
-- AMD's Windows HIP SDK matrix does list RX 6900 XT as RDNA2 / gfx1030 with Runtime and HIP SDK support.
-- AMD TheRock multi-arch packaging supports per-device extras and provides a `device-gfx1030` route.
-- TheRock Windows PyTorch packages are available, but nightly packages can be unstable.
+See `docs/KNOWN_GOOD_RX6900XT.md` for exact observed versions.
 
-Therefore:
+## Known traps already encountered
 
-> Do not reject RX 6900 XT simply because the production PyTorch compatibility table omits it. Check the TheRock path and the local test ledger first.
+Do not repeat these:
 
-## Known-good install command
+- Logger wrapper parameter mismatch (`WorkerArgument`).
+- Internal `worker` token leaking into `ComfyUI main.py`.
+- Windows BAT `shift` changing `%0`, making `%~f0` empty.
+- Missing `torchaudio` after protecting torch packages from ComfyUI requirements.
+- Starting a second ComfyUI instance, causing port 8188 conflict and SQLite lock.
+- Z-Image template missing model files.
+- Z-Image workflow selecting `pixel_space` instead of `ae.safetensors`, producing a 16-channel tensor that `SaveImage` cannot save.
 
-```bat
-py -3.12 -m venv .venv
-.venv\Scripts\python.exe -m pip install --upgrade pip
-.venv\Scripts\python.exe -m pip install --upgrade --index-url https://rocm.nightlies.amd.com/whl-multi-arch/ "torch[device-gfx1030]" "torchvision[device-gfx1030]"
-```
+See `docs/TROUBLESHOOTING.md` and `docs/TEST_LEDGER.md` before proposing a fix.
 
-## Mandatory preflight
+## Z-Image Turbo golden path
 
-Before changing packages, run:
+Use:
 
-```bat
-.venv\Scripts\python.exe scripts\doctor.py
-.venv\Scripts\python.exe -m pip freeze > before-change-freeze.txt
-```
+- `qwen_3_4b.safetensors` — `models\text_encoders`
+- `z_image_turbo_bf16.safetensors` — `models\diffusion_models`
+- `ae.safetensors` — `models\vae`
 
-If the doctor passes, assume the AMD/PyTorch base is healthy until the application layer is proven otherwise.
+Critical: `Load VAE` must select **`ae.safetensors`**, not `pixel_space`.
 
-## Forbidden default behavior
+A verified workflow is included at:
 
-An AI agent must NOT automatically:
+`workflows\Z_IMAGE_TURBO_RX6900XT_VERIFIED.json`
 
-- replace TheRock torch with plain `pip install torch`;
-- install NVIDIA CUDA Toolkit as a fix for a ROCm/HIP issue;
-- assume `torch.cuda` means NVIDIA CUDA;
-- downgrade torch just because an old repository pins CUDA-era versions;
-- install an old project's historical torch/torchvision pins before checking compatibility;
-- destroy a working venv to test a new framework;
-- mix unrelated ComfyUI, RVC, LLM, vision, and training dependencies in one environment;
-- claim RX 6900 XT is unsupported without stating which support layer is meant;
-- claim a new stack is known-good without recording a local successful test.
+## Warnings that were observed but were not blockers
 
-## Dependency policy
+- `CK grouped conv library not found for device gfx1030` from MIOpen, while the actual Conv2d smoke test still passes.
+- ComfyUI-Manager registry/network fetch failures that fall back to local/raw GitHub data.
+- Legacy API deprecation warnings from custom node UI extensions.
+- Missing `OpenGL_accelerate` while ComfyUI still starts and generates.
+- Triton backend unavailable while HIP/eager backends remain available.
 
-Each application gets its own venv:
-
-```text
-.venv_comfyui
-.venv_diffusers
-.venv_rvc
-.venv_llm
-.venv_vision
-```
-
-If a project ships requirements that pin torch, torchvision, xformers, triton, bitsandbytes, flash-attn, CUDA extensions, or another GPU runtime, inspect those pins before installation.
-
-Prefer:
-
-```text
-install TheRock torch first
--> install application deps without replacing torch
--> smoke test
--> only then add optional accelerators/custom nodes
-```
-
-## CUDA-language translation
-
-Many Python projects use CUDA terminology even when running on AMD.
-
-Examples:
-
-```python
-torch.cuda.is_available()
-torch.cuda.get_device_name(0)
-tensor.cuda()
-```
-
-With ROCm PyTorch these APIs can be valid on AMD. Do not rewrite them purely because the machine has no NVIDIA card.
-
-But native CUDA dependencies are different. Treat these as suspicious until verified:
-
-- custom `.cu` extensions
-- nvcc build steps
-- NVIDIA-only xformers wheels
-- bitsandbytes CUDA wheels
-- flash-attn CUDA builds
-- TensorRT
-- CUDA graphs/extensions that explicitly require NVIDIA
+Do not treat these as root causes unless the actual workload fails at the same subsystem.
 
 ## Validation hierarchy
 
@@ -130,17 +98,18 @@ When something fails, isolate the layer in this order:
 
 Do not jump directly to reinstalling the whole stack.
 
-## Known local proof
+## Earlier proven vision workload
 
-The NuovaRicambi Image Cleaner project used the following setup command:
+The NuovaRicambi Image Cleaner stack is also a canonical local example:
 
-```bat
-pip install --upgrade --index-url https://rocm.nightlies.amd.com/whl-multi-arch/ "torch[device-gfx1030]" "torchvision[device-gfx1030]"
+```text
+TheRock ROCm PyTorch / gfx1030
+-> DENet watermark/logo mask detection
+-> BiRefNet segmentation
+-> GPU batch pipeline
 ```
 
-Its doctor includes a GPU BatchNorm smoke test. The project also explicitly protects the environment from DENet's historical `torch==1.8.1 / torchvision==0.9.1` pins.
-
-That is a canonical example of how old model repositories should be integrated: preserve the modern working GPU runtime and adapt the old dependency set around it.
+Its historical DENet pins (`torch==1.8.1`, `torchvision==0.9.1`) must **not** be installed over the modern TheRock runtime.
 
 ## Recording new findings
 
@@ -149,7 +118,7 @@ Every meaningful test must be added to `docs/TEST_LEDGER.md` with:
 - date
 - workload
 - exact environment
-- exact command
+- exact command/settings
 - result: PASS / FAIL / BLOCKED / UNKNOWN
 - error if any
 - action taken
